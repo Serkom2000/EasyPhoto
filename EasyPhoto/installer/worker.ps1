@@ -1,8 +1,10 @@
 ﻿param([string]$Source, [string]$Target, [string]$State)
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$BitsJob = $null
+. (Join-Path $PSScriptRoot 'http-download.ps1')
+$script:CurrentPhase = 'Проверка условий установки'
 function Update-State($phase, $detail, $percent, $status = 'working') {
+    $script:CurrentPhase = $phase
     @{phase=$phase; detail=$detail; percent=$percent; status=$status} | ConvertTo-Json | Set-Content -Encoding UTF8 -LiteralPath "$State.tmp"
     Move-Item -Force -LiteralPath "$State.tmp" -Destination $State
 }
@@ -44,27 +46,11 @@ try {
     }
     if (-not $Prepared) {
     if (-not (Test-Path -LiteralPath $Archive)) {
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        Update-State 'Скачиваем движок' 'Python, CUDA и библиотеки установятся вместе. Можно оставить это окно открытым.' 30
-        $BitsJob = Start-BitsTransfer -Asynchronous -Priority Foreground -Source $Manifest.engineUrl -Destination $Archive -DisplayName 'EasyPhoto setup engine'
-        $Retries = 0; $LastBytes = 0; $LastTick = Get-Date
-        $Deadline = (Get-Date).AddHours(2)
-        while ($true) {
-            $BitsJob = Get-BitsTransfer -JobId $BitsJob.JobId
-            if ($BitsJob.JobState -eq 'Transferred') { Complete-BitsTransfer -BitsJob $BitsJob; $BitsJob = $null; break }
-            if ($BitsJob.JobState -in @('Error','TransientError','Suspended')) {
-                if ($Retries -ge 5) { throw 'Соединение оборвалось. Проверьте интернет и повторите установку.' }
-                $Retries++; Resume-BitsTransfer -BitsJob $BitsJob -Asynchronous | Out-Null
-            }
-            if ((Get-Date) -gt $Deadline) { throw 'Скачивание заняло слишком много времени. Проверьте интернет и повторите установку.' }
-            if ($BitsJob.BytesTotal -gt 0 -and $BitsJob.BytesTotal -lt [uint64]::MaxValue) {
-                $Fraction = $BitsJob.BytesTransferred / $BitsJob.BytesTotal
-                $Seconds = [Math]::Max(0.1, ((Get-Date) - $LastTick).TotalSeconds)
-                $Speed = ($BitsJob.BytesTransferred - $LastBytes) / $Seconds
-                $LastBytes = $BitsJob.BytesTransferred; $LastTick = Get-Date
-                Update-State 'Скачиваем движок' ('{0:N1}% · {1:N1} из {2:N0} МБ · {3:N0} КБ/с' -f ($Fraction*100),($BitsJob.BytesTransferred/1MB),($BitsJob.BytesTotal/1MB),($Speed/1KB)) (30 + 40*$Fraction)
-            }
-            Start-Sleep -Seconds 1
+        Update-State 'Скачиваем движок' 'Прямая загрузка без службы BITS. Модели повторно не скачиваются.' 30
+        Receive-EasyPhotoFile -Url $Manifest.engineUrl -Destination $Archive -Progress {
+            param($Done, $Total, $Speed)
+            $Fraction = if ($Total -gt 0) { $Done / $Total } else { 0 }
+            Update-State 'Скачиваем движок' ('{0:N1}% · {1:N1} МБ · {2:N0} КБ/с' -f ($Fraction*100),($Done/1MB),($Speed/1KB)) (30 + 40*$Fraction)
         }
     }
     Update-State 'Проверяем движок' 'Проверка SHA-256 перед установкой.' 72
@@ -79,6 +65,7 @@ try {
     & $Python -s (Join-Path $Target 'scripts\check_models.py') | Out-File -Append -Encoding UTF8 "$State.log"
     if ($LASTEXITCODE -ne 0) { throw 'Модель повреждена. Распакуйте установочный архив заново.' }
     $Manifest.engineVersion | Set-Content -Encoding UTF8 (Join-Path $Runtime 'engine-version.txt')
+    Update-State 'Создаём ярлык' 'Проверки завершены, добавляем ярлык на рабочий стол.' 97
     $Shell = New-Object -ComObject WScript.Shell
     $Shortcut = $Shell.CreateShortcut((Join-Path ([Environment]::GetFolderPath('Desktop')) 'EasyPhoto.lnk'))
     $Shortcut.TargetPath = Join-Path $Target 'EasyPhoto.exe'
@@ -88,9 +75,11 @@ try {
     if (Test-Path -LiteralPath $Archive) { Remove-Item -LiteralPath $Archive -Force }
     Remove-Item -LiteralPath $Marker -Force
     Update-State 'Всё готово к первому кадру' 'EasyPhoto установлен. Открывайте его ярлыком на рабочем столе — дальше интернет не нужен.' 100 'done'
-} catch {
-    Update-State 'Установка не завершена' $_.Exception.Message 0 'error'
+ } catch {
+    $Failure = $_
+    $FailedPhase = $script:CurrentPhase
+    ($Failure | Format-List * -Force | Out-String) | Add-Content -Encoding UTF8 -LiteralPath "$State.log"
+    $Failure.Exception.ToString() | Add-Content -Encoding UTF8 -LiteralPath "$State.log"
+    Update-State 'Установка не завершена' ("Этап: $FailedPhase. " + $Failure.Exception.Message) 0 'error'
     exit 1
-} finally {
-    if ($BitsJob) { $BitsJob | Remove-BitsTransfer -ErrorAction SilentlyContinue }
 }
