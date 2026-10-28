@@ -123,6 +123,27 @@ class AppTests(unittest.TestCase):
         self.assertIn(b'EasyPhoto', self.call('/'))
         self.assertIn(b'function', self.call('/app.js'))
 
+    def test_profile_import_and_saved_set_survive_status_reload(self):
+        profile = {'name': 'Example', 'workflow': {'1': {'class_type': 'CLIPTextEncode', 'inputs': {'text': 'x'}}}, 'bindings': {'prompt': [['1', 'text']]}}
+        saved = self.call('/api/profile', profile)
+        self.assertEqual(len(saved['id']), 24)
+        self.call('/api/preset', {'name': 'My Flux', 'parameters': {'family': 'flux-dev', 'vae': 'ae.safetensors', 'image': 'do not persist'}})
+        state = self.call('/api/status')
+        self.assertEqual(state['profiles'][0]['name'], 'Example')
+        self.assertEqual(state['presets'][0]['parameters']['vae'], 'ae.safetensors')
+        self.assertNotIn('image', state['presets'][0]['parameters'])
+
+    def test_component_import_uses_selected_folder(self):
+        raw = b'{}'
+        raw = len(raw).to_bytes(8, 'little') + raw
+        for category in ('vae', 'loras', 'text_encoders', 'diffusion_models'):
+            req = request.Request(f'http://127.0.0.1:{self.server.server_port}/api/import?name=part.safetensors&category=' + category, raw, {'X-EasyPhoto-Token': app.TOKEN})
+            with patch.object(app, 'comfy_root', return_value=self.data):
+                with request.urlopen(req) as response:
+                    self.assertTrue(json.load(response)['ok'])
+            self.assertEqual((self.data / 'models' / category / 'part.safetensors').read_bytes(), raw)
+        self.assertFalse((self.data / 'models/checkpoints/part.safetensors').exists())
+
     def test_models_are_local_only(self):
         state = self.call('/api/status')
         self.assertNotIn('download', state)

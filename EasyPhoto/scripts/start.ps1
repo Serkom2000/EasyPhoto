@@ -67,6 +67,12 @@ if ((-not (Test-Path $PythonPath)) -or (-not (Test-Path (Join-Path $ComfyPath 'm
     Remove-Item $ArchivePath
 }
 
+$UpdateCore = Join-Path $PSScriptRoot 'update_core.py'
+if (Test-Path -LiteralPath $UpdateCore) {
+    & $PythonPath -I $UpdateCore --root $ProjectRoot --recover-only
+    if ($LASTEXITCODE -ne 0) { throw 'Update recovery failed. Open Updater.exe before starting EasyPhoto.' }
+}
+$AppLock = [IO.File]::Open((Join-Path $ProjectRoot '.easyphoto-lock'), [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
 $OwnedEngine = $null
 try {
     if (-not (Test-Comfy)) {
@@ -90,6 +96,7 @@ try {
     & $PythonPath @AppArgs
     if ($LASTEXITCODE -ne 0) { throw 'The EasyPhoto server stopped with an error.' }
 } finally {
+    $AppLock.Dispose()
     if ($OwnedEngine -and -not $OwnedEngine.HasExited) {
         Stop-Process -Id $OwnedEngine.Id -ErrorAction SilentlyContinue
     }

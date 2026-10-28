@@ -27,10 +27,11 @@ New-Item -ItemType Directory -Path (Join-Path $Build 'installer') -Force | Out-N
 if ($LASTEXITCODE -ne 0) { throw 'Could not compile installer.' }
 Copy-Item -LiteralPath $Zip -Destination (Join-Path $Build 'installer\7zr.exe')
 Copy-Item -Path (Join-Path $Root 'installer\*.ps1') -Destination (Join-Path $Build 'installer')
+& (Join-Path $PSScriptRoot 'build-update.ps1')
 $Payload = Join-Path $Build 'payload.7z'
 Push-Location $Root
 try {
-    & $Zip a -t7z -mx=0 $Payload app.py EasyPhoto.exe Start.bat README.md WINDOWS_TEST_REPORT.md extra_model_paths.yaml web scripts models '-xr!__pycache__' '-xr!*.part'
+    & $Zip a -t7z -mx=0 $Payload app.py model_profiles.py app-version.json profiles Updater.exe EasyPhoto.exe Start.bat README.md WINDOWS_TEST_REPORT.md extra_model_paths.yaml web scripts models '-xr!__pycache__' '-xr!*.part'
     if ($LASTEXITCODE -ne 0) { throw 'Could not package application and models.' }
 } finally { Pop-Location }
 $Manifest = @{

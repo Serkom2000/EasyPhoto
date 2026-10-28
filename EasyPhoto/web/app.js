@@ -51,7 +51,13 @@ function setMode(next) {
 }
 document.querySelectorAll('[data-mode]').forEach(button => button.addEventListener('click', () => setMode(button.dataset.mode)));
 function updateGenerate() {
-  $('generate').disabled = running || !status.connected || !status.models?.length;
+  const family = $('family').value, custom = family.startsWith('custom:');
+  const split = family.startsWith('flux-') && $('loader').value === 'split';
+  const missing = [];
+  if (!custom && !$('model').value) missing.push('модель');
+  if (split) { if (!$('vae').value) missing.push('VAE'); if (!$('clip1').value) missing.push('CLIP-L'); if (!$('clip2').value) missing.push('T5'); }
+  $('component-readiness').textContent = missing.length ? 'Выберите: ' + missing.join(', ') + '.' : '';
+  $('generate').disabled = running || !status.connected || missing.length > 0;
   $('generate').replaceChildren();
   const icon = document.createElement('span'); icon.textContent = '✦';
   const arrow = document.createElement('span'); arrow.textContent = '→';
@@ -83,7 +89,12 @@ function syncModelFormats() {
     if (button.classList.contains('active')) size = [...formats[index]];
   });
 }
-$('model').addEventListener('change', syncModelFormats);
+$('model').addEventListener('change', () => {
+  const known = status.catalog?.find(item => item.filename === $('model').value);
+  if (known && ['sd15','sdxl'].includes($('family').value)) $('family').value = known.id === 'sdxl' ? 'sdxl' : 'sd15';
+  syncModelFormats(); updateGenerate();
+});
+['vae','clip1','clip2'].forEach(id => $(id).addEventListener('change', updateGenerate));
 async function refreshStatus() {
   if (refreshing) return;
   refreshing = true;
@@ -94,13 +105,15 @@ async function refreshStatus() {
     $('setup-banner').hidden = status.connected && status.models?.length;
     $('setup-title').textContent = status.connected ? 'Осталось добавить первую модель' : 'Подготовим вашу мастерскую';
     $('setup-description').textContent = status.connected ? 'Откройте раздел «Модели» и добавьте файл модели из комплекта или свой.' : 'Запустите Start.bat или подключите установленный ComfyUI.';
-    fillSelect($('model'), status.models, 'Сначала добавьте модель');
+    syncProfiles();
+    syncComponents();
+    $('app-version').textContent = status.version || '0.2.0';
     syncModelFormats();
     fillSelect($('controlnet'), status.controlnets, 'Нет установленных ControlNet');
     if (document.activeElement !== $('comfy-path')) $('comfy-path').value = status.comfy_path || '';
     $('device-info').textContent = status.devices?.length ? status.devices.map(d => `${d.name} · ${((d.vram_total || 0) / 1024 ** 3).toFixed(1)} ГБ памяти`).join(' / ') : 'Движок пока не подключён.';
     renderCatalog();
-    $('installed-models').replaceChildren(...(status.models || []).map(name => {const li = document.createElement('li'); li.textContent = name; return li;}));
+    $('installed-models').replaceChildren(...Object.entries(status.components || {}).flatMap(([category, files]) => files.map(name => category + ': ' + name)).map(name => {const li = document.createElement('li'); li.textContent = name; return li;}));
     updateGenerate();
   } catch (err) { $('connection-text').textContent = 'Приложение недоступно'; status.connected = false; updateGenerate(); }
   finally { refreshing = false; }
@@ -131,9 +144,9 @@ $('import-model').addEventListener('click', () => {
 $('model-file').addEventListener('change', () => {
   const file = $('model-file').files[0];
   if (!file) return;
-  if (!file.name.toLowerCase().endsWith('.safetensors')) return notify('Выберите файл .safetensors.');
+  if (!/\.(safetensors|gguf)$/i.test(file.name)) return notify('Выберите файл .safetensors или .gguf.');
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/import?name=' + encodeURIComponent(file.name));
+  xhr.open('POST', '/api/import?name=' + encodeURIComponent(file.name) + '&category=' + encodeURIComponent($('import-category').value));
   xhr.setRequestHeader('X-EasyPhoto-Token', token);
   $('import-model').disabled = true;
   $('import-status').textContent = 'Копируем модель в локальную папку движка…';
@@ -210,7 +223,7 @@ $('generate-form').addEventListener('submit', async event => {
   try {
     if (mode !== 'create' && !source) throw new Error(mode === 'pose' ? 'Добавьте карту позы OpenPose.' : 'Добавьте исходную фотографию.');
     if (mode === 'pose' && !$('controlnet').value) throw new Error('Добавьте модель OpenPose ControlNet в разделе «Модели».');
-    const payload = {mode, prompt: $('prompt').value, model: $('model').value, width: size[0], height: size[1], steps: Number($('steps').value), cfg: Number($('cfg').value), seed: $('seed').value, negative: $('negative').value, strength: Number($('strength').value) / 100};
+    const payload = {...componentParameters(), mode, prompt: $('prompt').value, model: $('model').value, width: size[0], height: size[1], steps: Number($('steps').value), cfg: Number($('cfg').value), seed: $('seed').value, negative: $('negative').value, strength: Number($('strength').value) / 100};
     if (mode !== 'create') payload.image = source;
     if (mode === 'edit') {payload.mask = maskData(); payload.width = photo.width; payload.height = photo.height;}
     if (mode === 'pose') payload.controlnet = $('controlnet').value;
@@ -263,7 +276,7 @@ async function loadHistory(render = true) {
       reuse.addEventListener('click', () => {
         if (running) return notify('Дождитесь завершения генерации.');
         showView('studio'); setMode(record.mode || 'create');
-        ['prompt','negative','steps','cfg','seed','model','controlnet'].forEach(k => {if (record[k] !== undefined) $(k).value = record[k];});
+        restoreParameters(record);
         syncModelFormats();
         $('prompt-count').textContent = $('prompt').value.length;
         $('strength').value = (record.strength || .75) * 100; $('strength').dispatchEvent(new Event('input'));
@@ -283,6 +296,90 @@ async function loadHistory(render = true) {
   } catch (e) {notify(e.message);}
 }
 $('refresh-history').addEventListener('click', () => loadHistory());
+function optionalSelect(element, values, label) {
+  const previous = element.value;
+  element.replaceChildren(new Option(label, ''), ...(values || []).map(name => new Option(name, name)));
+  if ((values || []).includes(previous)) element.value = previous;
+}
+function syncProfiles() {
+  const previous = $('family').value;
+  $('family').querySelectorAll('[data-custom]').forEach(el => el.remove());
+  (status.profiles || []).forEach(item => {const option = new Option(item.name, 'custom:' + item.id); option.dataset.custom = 'true'; $('family').add(option);});
+  if ([...$('family').options].some(o => o.value === previous)) $('family').value = previous;
+  const saved = $('preset').value;
+  $('preset').replaceChildren(new Option('Новый набор', ''), ...(status.presets || []).map((item, i) => new Option(item.name, String(i))));
+  $('preset').value = saved;
+}
+function syncComponents() {
+  const family = $('family').value, flux = family.startsWith('flux-'), custom = family.startsWith('custom:');
+  $('loader-field').hidden = !flux;
+  const split = flux && $('loader').value === 'split';
+  const initial = !formatModel;
+  if (custom) optionalSelect($('model'), [...(status.models || []), ...(status.components?.diffusion_models || [])], 'Берётся из профиля');
+  else {
+    const eligible = (status.models || []).filter(name => {
+      const known = status.catalog?.find(item => item.filename === name);
+      return !known || (known.id === 'sdxl' ? family === 'sdxl' : family === 'sd15');
+    });
+    fillSelect($('model'), split ? status.components?.diffusion_models : eligible, 'Добавьте файл в «Моделях»');
+  }
+  if (initial && family === 'sdxl' && status.models?.includes('sd_xl_base_1.0.safetensors')) $('model').value = 'sd_xl_base_1.0.safetensors';
+  optionalSelect($('vae'), status.components?.vae, split ? 'Выберите VAE' : 'Встроенный в checkpoint');
+  optionalSelect($('clip1'), status.components?.text_encoders, split ? 'Выберите CLIP-L' : 'Встроенный в checkpoint');
+  optionalSelect($('clip2'), status.components?.text_encoders, split ? 'Выберите T5' : 'Встроенный / не нужен');
+  $('family-hint').textContent = custom ? 'Профиль задаёт схему. Поля компонентов заменяют только его явно заданные bindings.' : flux ? 'FLUX.1: CLIP-L + T5 + ae VAE. Dev и Schnell — разные варианты; проверьте описание файла.' : 'Семейство выбирается по описанию файла. LoRA и VAE должны с ним совпадать.';
+  document.querySelector('.language-hint').textContent = family.startsWith('sd') ? 'Для SD описание на английском обычно работает лучше. Автоперевода пока нет.' : 'Язык описания зависит от модели. Автоперевода пока нет.';
+  if (split) $('component-details').open = true;
+  syncModelFormats(); updateGenerate();
+}
+function loraRow(name = '', strength = 1) {
+  if ($('lora-list').children.length >= 8) return notify('Можно подключить до восьми LoRA.');
+  const row = document.createElement('div'); row.className = 'lora-row';
+  const select = document.createElement('select'); select.setAttribute('aria-label', 'Файл LoRA');
+  optionalSelect(select, status.components?.loras, 'Выберите LoRA'); select.value = name;
+  const input = document.createElement('input'); input.type = 'number'; input.min = '-2'; input.max = '2'; input.step = '0.1'; input.value = strength; input.setAttribute('aria-label', 'Сила LoRA');
+  const remove = document.createElement('button'); remove.type = 'button'; remove.className = 'text-button'; remove.textContent = 'Убрать'; remove.onclick = () => row.remove();
+  row.append(select, input, remove); $('lora-list').append(row);
+}
+function componentParameters() {
+  return {family: $('family').value, loader: $('loader').value, vae: $('vae').value, clip1: $('clip1').value, clip2: $('clip2').value, guidance: Number($('guidance').value),
+    loras: [...$('lora-list').children].filter(row => row.querySelector('select').value).map(row => ({name: row.querySelector('select').value, strength: Number(row.querySelector('input').value)}))};
+}
+function restoreParameters(record) {
+  $('family').value = record.family || 'sdxl'; $('loader').value = record.loader || 'split'; syncComponents();
+  ['prompt','negative','steps','cfg','seed','model','controlnet','vae','clip1','clip2','guidance'].forEach(k => {if (record[k] !== undefined) $(k).value = record[k];});
+  $('lora-list').replaceChildren(); (record.loras || []).forEach(item => loraRow(item.name, item.strength));
+  syncModelFormats(); updateGenerate();
+}
+$('family').addEventListener('change', () => {
+  const defaults = status.families?.[$('family').value];
+  if (defaults) { $('steps').value = defaults[1]; $('cfg').value = defaults[2]; }
+  $('guidance').value = $('family').value === 'flux-schnell' ? 0 : 3.5;
+  if ($('family').value.startsWith('custom:')) $('model').value = '';
+  syncComponents();
+});
+$('loader').addEventListener('change', syncComponents);
+$('add-lora').addEventListener('click', () => loraRow());
+$('preset').addEventListener('change', () => {const item = status.presets?.[Number($('preset').value)]; if ($('preset').value !== '' && item) restoreParameters(item.parameters);});
+$('save-preset').addEventListener('click', async () => {
+  const name = window.prompt('Название набора моделей и параметров'); if (!name?.trim()) return;
+  try { await api('preset', {name, parameters: {...componentParameters(), model: $('model').value, steps: Number($('steps').value), cfg: Number($('cfg').value)}}); await refreshStatus(); notify('Набор сохранён. Теперь он доступен в списке «Мой набор».'); } catch (e) { notify(e.message); }
+});
+$('import-profile').addEventListener('click', () => $('profile-file').click());
+$('profile-file').addEventListener('change', async () => {
+  try {
+    const file = $('profile-file').files[0]; if (!file) return;
+    if (file.size > 2 * 1024 ** 2) throw new Error('Профиль должен быть меньше 2 МБ.');
+    const result = await api('profile', JSON.parse(await file.text()));
+    await refreshStatus(); $('family').value = 'custom:' + result.id; $('model').value = ''; syncComponents();
+    $('profile-status').textContent = 'Добавлен профиль «' + result.name + '». Выбран в студии.';
+  } catch (e) { $('profile-status').textContent = 'Профиль не добавлен: ' + e.message; }
+  finally { $('profile-file').value = ''; }
+});
+$('update-app').addEventListener('click', async () => {
+  try { await api('update', {}); $('update-status').textContent = 'Открыто окно обновления. Дождитесь закрытия окна запуска EasyPhoto и нажмите в обновлении «Проверить обновления».'; $('update-app').disabled = true; }
+  catch (e) { $('update-status').textContent = e.message; }
+});
 (async () => {
   try {
     token = (await api('session')).token;

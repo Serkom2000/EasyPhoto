@@ -64,3 +64,8 @@ img2img, маска с сохранением пикселей вне выдел
 [SDXL](https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0),
 [DreamShaper](https://huggingface.co/Lykon/DreamShaper),
 [ComfyUI](https://github.com/Comfy-Org/ComfyUI).
+
+
+## Обновление существующей установки
+
+[Скачать маленький Updater](https://github.com/Serkom2000/EasyPhoto/releases/latest/download/EasyPhoto-Updater.zip). Закройте EasyPhoto, распакуйте рядом с установленным EasyPhoto.exe и запустите Updater.exe. Модели и runtime повторно не скачиваются. В версии 0.2 добавлены компоненты VAE/LoRA/энкодеры, схемы FLUX.1 и Turbo, сохранённые наборы и импорт профилей для других архитектур движка. Подробности — в [инструкции](EasyPhoto/README.md).

@@ -1,0 +1,139 @@
+{
+  "name": "Пример SD — замените файл модели",
+  "workflow": {
+    "1": {
+      "class_type": "CheckpointLoaderSimple",
+      "inputs": {
+        "ckpt_name": "your-model.safetensors"
+      }
+    },
+    "2": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "clip": [
+          "1",
+          1
+        ],
+        "text": "a photograph"
+      }
+    },
+    "3": {
+      "class_type": "CLIPTextEncode",
+      "inputs": {
+        "clip": [
+          "1",
+          1
+        ],
+        "text": ""
+      }
+    },
+    "4": {
+      "class_type": "EmptyLatentImage",
+      "inputs": {
+        "width": 1024,
+        "height": 1024,
+        "batch_size": 1
+      }
+    },
+    "5": {
+      "class_type": "KSampler",
+      "inputs": {
+        "model": [
+          "1",
+          0
+        ],
+        "positive": [
+          "2",
+          0
+        ],
+        "negative": [
+          "3",
+          0
+        ],
+        "latent_image": [
+          "4",
+          0
+        ],
+        "seed": 42,
+        "steps": 25,
+        "cfg": 6.0,
+        "sampler_name": "dpmpp_2m",
+        "scheduler": "karras",
+        "denoise": 1.0
+      }
+    },
+    "6": {
+      "class_type": "VAEDecode",
+      "inputs": {
+        "samples": [
+          "5",
+          0
+        ],
+        "vae": [
+          "1",
+          2
+        ]
+      }
+    },
+    "7": {
+      "class_type": "SaveImage",
+      "inputs": {
+        "images": [
+          "6",
+          0
+        ],
+        "filename_prefix": "EasyPhoto"
+      }
+    }
+  },
+  "bindings": {
+    "prompt": [
+      [
+        "2",
+        "text"
+      ]
+    ],
+    "negative": [
+      [
+        "3",
+        "text"
+      ]
+    ],
+    "model": [
+      [
+        "1",
+        "ckpt_name"
+      ]
+    ],
+    "seed": [
+      [
+        "5",
+        "seed"
+      ]
+    ],
+    "steps": [
+      [
+        "5",
+        "steps"
+      ]
+    ],
+    "cfg": [
+      [
+        "5",
+        "cfg"
+      ]
+    ],
+    "width": [
+      [
+        "4",
+        "width"
+      ]
+    ],
+    "height": [
+      [
+        "4",
+        "height"
+      ]
+    ]
+  }
+}

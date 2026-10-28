@@ -66,3 +66,13 @@ workflow не поддерживаются. Другой компьютер и �
 Ограничение проверки сети: скорость загрузок менялась от нормальной до десятков
 КБ/с. Успешная проверка установки на этом компьютере не гарантирует доступность
 GitHub у каждого получателя. Контрольная сумма движка проверяется до распаковки.
+
+
+## 0.2 — model profiles and incremental updates (2026-10-29)
+
+- Regression on RTX 4060 Laptop 8GB: DreamShaper SD1.5 create, SDXL create, SD1.5 image edit returned persisted output PNGs. 512px / 4 steps smoke parameters check execution, not image quality.
+- FLUX Dev/Schnell and SD/SDXL Turbo: actual ComfyUI 0.43.0 object_info schema/required inputs/enums/socket types checked using placeholder component names. Their weights are absent, so GPU generation for these families is unverified.
+- Native Updater.exe compiled with Windows .NET Framework and opened a responding Russian WPF window. All PowerShell sources parse with Windows PowerShell 5.1. Full updater UI automation was unavailable: node_repl computer-use helper failed to write kernel assets. Remote Windows 10 device was not accessible.
+- Headless installed Chrome browser exercised normal model readiness, blocked missing FLUX components, family copy, update POST, 390px overflow and JavaScript errors. Visual reviewer scored the five scoped fixes resolved. New controls preserve the incumbent paper/olive design.
+- Updater tests use real temporary files: changed-only/no-op, bad SHA, local edit conflict, injected apply failure rollback, crash recovery, protected weights/settings/outputs, downgrade, forbidden paths/foreign URL, concurrent lock, tampered journal and real Windows junction rejection.
+- New HTTP contracts cover selected category import, saved sets and profile persistence; original create/edit/mask/pose/history/auth contracts retained. No full model package rebuilt or downloaded.

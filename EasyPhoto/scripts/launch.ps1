@@ -20,6 +20,7 @@ $Open.Add_Click({ Start-Process $Address; $Window.WindowState = 'Minimized' })
 $Timer = New-Object Windows.Threading.DispatcherTimer
 $Timer.Interval = [TimeSpan]::FromSeconds(1)
 $Timer.Add_Tick({
+    if ($script:Ready -and $Worker.HasExited) { $Window.Close(); return }
     if ($script:Ready -or $script:Checking) { return }
     if ($Worker.HasExited) { $Heading.Text = 'Не удалось открыть мастерскую'; $Detail.Text = 'Подробности в data\logs\launcher-error.log. Проверьте драйвер NVIDIA и повторите запуск.'; $Progress.IsIndeterminate = $false; $Timer.Stop(); return }
     $script:Checking = $true

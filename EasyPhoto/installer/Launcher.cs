@@ -8,12 +8,13 @@ using System.Threading;
 class Entry {
   [STAThread] static void Main() {
     string root = AppDomain.CurrentDomain.BaseDirectory;
-#if SETUP
-    bool setup = true;
+#if UPDATER
+    string script = Path.Combine(root, "scripts\\update.ps1");
+#elif SETUP
+    string script = Path.Combine(root, "installer\\install.ps1");
 #else
-    bool setup = false;
+    string script = Path.Combine(root, "scripts\\launch.ps1");
 #endif
-    string script = Path.Combine(root, setup ? "installer\\install.ps1" : "scripts\\launch.ps1");
     try {
       Environment.CurrentDirectory = root;
       using (var runspace = RunspaceFactory.CreateRunspace()) {

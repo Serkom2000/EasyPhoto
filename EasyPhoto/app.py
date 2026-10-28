@@ -13,6 +13,11 @@ import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib import request, parse, error
 import webbrowser
+import subprocess
+import importlib.util
+_profile_spec = importlib.util.spec_from_file_location('easyphoto_profiles', Path(__file__).resolve().with_name('model_profiles.py'))
+profiles = importlib.util.module_from_spec(_profile_spec)
+_profile_spec.loader.exec_module(profiles)
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT / 'data'
@@ -64,8 +69,12 @@ def integer(value, low, high, label):
 
 def workflow(p, info):
     model = p.get('model')
-    if model not in choices(info, 'CheckpointLoaderSimple', 'ckpt_name'):
+    custom = str(p.get('family', '')).startswith('custom:')
+    split = p.get('family', '').startswith('flux-') and p.get('loader', 'split') == 'split'
+    if not custom and not split and model not in choices(info, 'CheckpointLoaderSimple', 'ckpt_name'):
         raise ValueError('Выберите установленную модель.')
+    if not custom and not split:
+        checkpoint_preflight(model, p)
     mode = p.get('mode', 'create')
     if mode not in ('create', 'edit', 'pose'):
         raise ValueError('Неизвестный режим.')
@@ -82,12 +91,19 @@ def workflow(p, info):
     cfg = float(p.get('cfg', 6))
     if not 0.05 <= strength <= 1 or not 1 <= cfg <= 15:
         raise ValueError('Недопустимая сила изменения или CFG.')
+    if custom:
+        profile_id = p['family'].removeprefix('custom:')
+        if not __import__('re').fullmatch(r'[a-f0-9]{24}', profile_id):
+            raise ValueError('Некорректный профиль.')
+        profile = json.loads((DATA / 'profiles' / (profile_id + '.json')).read_text('utf-8'))
+        values = dict(p, seed=seed, width=width, height=height, steps=integer(p.get('steps', 25), 1, 60, 'Шаги'), cfg=cfg, prompt=prompt)
+        return profiles.custom_workflow(profile, values, info, upload_png), seed
     graph = {
         '1': {'class_type': 'CheckpointLoaderSimple', 'inputs': {'ckpt_name': model}},
         '2': {'class_type': 'CLIPTextEncode', 'inputs': {'clip': ['1', 1], 'text': prompt}},
         '3': {'class_type': 'CLIPTextEncode', 'inputs': {'clip': ['1', 1], 'text': str(p.get('negative', ''))[:10000]}},
         '4': {'class_type': 'EmptyLatentImage', 'inputs': {'width': width, 'height': height, 'batch_size': 1}},
-        '5': {'class_type': 'KSampler', 'inputs': {'model': ['1', 0], 'positive': ['2', 0], 'negative': ['3', 0], 'latent_image': ['4', 0], 'seed': seed, 'steps': integer(p.get('steps', 25), 4, 60, 'Шаги'), 'cfg': cfg, 'sampler_name': 'dpmpp_2m', 'scheduler': 'karras', 'denoise': 1.0}},
+        '5': {'class_type': 'KSampler', 'inputs': {'model': ['1', 0], 'positive': ['2', 0], 'negative': ['3', 0], 'latent_image': ['4', 0], 'seed': seed, 'steps': integer(p.get('steps', profiles.FAMILIES.get(p.get('family', 'sdxl'), ('',25,6))[1]), 1, 60, 'Шаги'), 'cfg': cfg, 'sampler_name': 'dpmpp_2m', 'scheduler': 'karras', 'denoise': 1.0}},
         '6': {'class_type': 'VAEDecode', 'inputs': {'samples': ['5', 0], 'vae': ['1', 2]}},
         '7': {'class_type': 'SaveImage', 'inputs': {'images': ['6', 0], 'filename_prefix': 'EasyPhoto'}},
     }
@@ -113,7 +129,7 @@ def workflow(p, info):
         graph['9'] = {'class_type': 'ControlNetLoader', 'inputs': {'control_net_name': control}}
         graph['10'] = {'class_type': 'ControlNetApplyAdvanced', 'inputs': {'positive': ['2', 0], 'negative': ['3', 0], 'control_net': ['9', 0], 'image': ['8', 0], 'strength': 1.0, 'start_percent': 0.0, 'end_percent': 1.0, 'vae': ['1', 2]}}
         graph['5']['inputs'].update(positive=['10', 0], negative=['10', 1])
-    return graph, seed
+    return profiles.adapt(graph, p, info), seed
 
 
 def upload_png(encoded, label):
@@ -153,6 +169,33 @@ def check_safetensors(path):
             raise ValueError('Некорректный заголовок модели.')
 
 
+def checkpoint_preflight(name, parameters):
+    """Catch the common diffusion-only-as-checkpoint mistake without loading tensors."""
+    engine = comfy_root()
+    folders = [ROOT / 'models/checkpoints']
+    if engine:
+        folders.append(engine / 'models/checkpoints')
+    for folder in folders:
+        path = folder / name
+        if path.suffix.lower() != '.safetensors' or not path.is_file():
+            continue
+        with path.open('rb') as source:
+            length = int.from_bytes(source.read(8), 'little')
+            if not 2 <= length <= 8 * 1024**2:
+                return
+            keys = json.loads(source.read(length)).keys()
+        if any(key.startswith(('double_blocks.', 'single_blocks.', 'transformer_blocks.')) for key in keys):
+            raise ValueError('Этот файл содержит отдельную diffusion model. Добавьте его в категорию Diffusion model и выберите подходящее семейство или профиль, VAE и энкодеры.')
+        if any(key.startswith('model.diffusion_model.') for key in keys):
+            has_clip = any(key.startswith(('cond_stage_model.', 'conditioner.', 'text_encoders.', 'clip_l.', 'clip_g.', 't5xxl.')) for key in keys)
+            has_vae = any(key.startswith('first_stage_model.') for key in keys)
+            if not has_clip and not parameters.get('clip1'):
+                raise ValueError('В checkpoint нет текстового энкодера. Выберите внешние энкодеры в блоке VAE, энкодеры и LoRA.')
+            if not has_vae and not parameters.get('vae'):
+                raise ValueError('В checkpoint нет VAE. Выберите внешний VAE.')
+        return
+
+
 class Handler(BaseHTTPRequestHandler):
     def valid_host(self):
         return self.headers.get('Host') in (f'127.0.0.1:{self.server.server_port}', f'localhost:{self.server.server_port}')
@@ -185,15 +228,17 @@ class Handler(BaseHTTPRequestHandler):
             return self.send({'token': TOKEN})
         if url.path == '/api/status':
             root = comfy_root()
-            result = {'connected': False, 'comfy_path': str(root or ''), 'catalog': [{k: v for k, v in item.items() if k != 'url'} | {'id': key} for key, item in CATALOG.items()]}
+            result = {'version': json.loads((ROOT / 'app-version.json').read_text('utf-8'))['version'], 'families': profiles.FAMILIES, 'profiles': [{**json.loads(path.read_text('utf-8')), 'id': path.stem} for path in (DATA / 'profiles').glob('*.json')], 'presets': json.loads((DATA / 'presets.json').read_text('utf-8')) if (DATA / 'presets.json').exists() else [], 'connected': False, 'comfy_path': str(root or ''), 'catalog': [{k: v for k, v in item.items() if k != 'url'} | {'id': key} for key, item in CATALOG.items()]}
             try:
                 info = api('/object_info', timeout=3)
-                result.update(connected=True, models=choices(info, 'CheckpointLoaderSimple', 'ckpt_name'), controlnets=choices(info, 'ControlNetLoader', 'control_net_name'))
+                result.update(components=profiles.components(info), connected=True, models=choices(info, 'CheckpointLoaderSimple', 'ckpt_name'), controlnets=choices(info, 'ControlNetLoader', 'control_net_name'))
                 stats = api('/system_stats', timeout=3)
                 result['devices'] = stats.get('devices', [])
             except (OSError, ValueError) as exc:
                 result['connection_error'] = str(exc)
             return self.send(result)
+        if url.path == '/api/profile-example':
+            return self.send((ROOT / 'profiles/examples/basic.json').read_bytes())
         if url.path == '/api/history':
             records = []
             for path in (DATA / 'jobs').glob('*.json'):
@@ -255,9 +300,43 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if parse.urlsplit(self.path).path == '/api/import':
                 return self.import_model()
-            size = integer(self.headers.get('Content-Length', 0), 1, 60 * 1024**2, 'Размер запроса')
+            size = integer(self.headers.get('Content-Length', 0), 1, (2 if self.path == '/api/profile' else 60) * 1024**2, 'Размер запроса')
             p = json.loads(self.rfile.read(size))
             if self.path == '/api/shutdown':
+                self.send({'ok': True})
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return
+            if self.path == '/api/profile':
+                profile = profiles.validate_profile(p)
+                folder = DATA / 'profiles'
+                folder.mkdir(exist_ok=True)
+                key = secrets.token_hex(12)
+                save_json(folder / (key + '.json'), profile)
+                return self.send({'id': key, 'name': profile['name']})
+            if self.path == '/api/preset':
+                name = str(p.get('name', '')).strip()[:80]
+                if not name or not isinstance(p.get('parameters'), dict):
+                    raise ValueError('Укажите название набора.')
+                target = DATA / 'presets.json'
+                with LOCK:
+                    presets = json.loads(target.read_text('utf-8')) if target.exists() else []
+                    presets = [item for item in presets if item['name'] != name]
+                    presets.append({'name': name, 'parameters': {k: v for k, v in p['parameters'].items() if k not in ('image', 'mask')}})
+                    if len(presets) > 100:
+                        raise ValueError('Можно сохранить до 100 наборов.')
+                    save_json(target, presets)
+                return self.send({'ok': True})
+            if self.path == '/api/update':
+                updater = ROOT / 'Updater.exe'
+                if not updater.is_file():
+                    raise ValueError('Распакуйте небольшой комплект Updater рядом с EasyPhoto.exe. Ссылка — в инструкции обновления.')
+                try:
+                    queue = api('/queue', timeout=3)
+                except (OSError, ValueError):
+                    queue = {}
+                if queue.get('queue_running') or queue.get('queue_pending'):
+                    raise ValueError('Дождитесь завершения генерации перед обновлением.')
+                subprocess.Popen([str(updater)], cwd=str(ROOT))
                 self.send({'ok': True})
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return
@@ -285,13 +364,18 @@ class Handler(BaseHTTPRequestHandler):
     def import_model(self):
         query = parse.parse_qs(parse.urlsplit(self.path).query)
         name = query.get('name', [''])[0]
-        if not name or '/' in name or '\\' in name or ':' in name or name.startswith('.') or not name.lower().endswith('.safetensors') or len(name) > 180:
+        if not name or '/' in name or '\\' in name or ':' in name or name.startswith('.') or not name.lower().endswith(('.safetensors', '.gguf')) or len(name) > 180:
             raise ValueError('Выберите файл модели .safetensors с обычным именем.')
+        if __import__('re').fullmatch(r'(?i)(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])', name.split('.')[0]):
+            raise ValueError('Это имя зарезервировано Windows. Переименуйте файл.')
         size = integer(self.headers.get('Content-Length', 0), 10, 32 * 1024**3, 'Размер модели')
         root = comfy_root()
         if root is None:
             raise ValueError('Сначала укажите папку ComfyUI в настройках.')
-        folder = root / 'models' / 'checkpoints'
+        category = query.get('category', ['checkpoints'])[0]
+        if category not in profiles.CATEGORIES:
+            raise ValueError('Неизвестная категория модели.')
+        folder = root / 'models' / category
         folder.mkdir(parents=True, exist_ok=True)
         target = folder / name
         if target.exists():
@@ -307,7 +391,10 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError('Копирование прервалось. Повторите добавление модели.')
                     destination.write(chunk)
                     remaining -= len(chunk)
-            check_safetensors(tmp)
+            if name.lower().endswith('.safetensors'):
+                check_safetensors(tmp)
+            elif tmp.open('rb').read(4) != b'GGUF':
+                raise ValueError('Некорректный файл GGUF.')
             # Windows rename and POSIX link publish atomically without overwriting.
             if os.name == 'nt':
                 os.rename(tmp, target)
