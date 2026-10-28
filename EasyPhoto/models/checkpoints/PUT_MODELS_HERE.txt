@@ -1,0 +1,7 @@
+Положите сюда два полных файла (не архивы и не .part):
+
+sd_xl_base_1.0.safetensors
+DreamShaper_8_pruned.safetensors
+
+Точные размеры, SHA-256 и страницы авторов указаны в models/manifest.json.
+Перед упаковкой scripts/package.ps1 проверит оба файла.

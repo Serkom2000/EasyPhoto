@@ -1,0 +1,22 @@
+{
+  "sdxl": {
+    "name": "SDXL Base 1.0",
+    "filename": "sd_xl_base_1.0.safetensors",
+    "description": "Создание и изменение фото • 6,46 ГБ",
+    "source": "https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0",
+    "license": "CreativeML Open RAIL++-M",
+    "size": 6938078334,
+    "sha256": "31e35c80fc4829d14f90153f4c74cd59c90b779f6afe05a74cd6120b893f7e5b",
+    "formats": [[1024, 1024], [768, 1152], [1152, 768]]
+  },
+  "dreamshaper8": {
+    "name": "DreamShaper 8",
+    "filename": "DreamShaper_8_pruned.safetensors",
+    "description": "Фото и иллюстрации • SD 1.5 • 1,99 ГБ",
+    "source": "https://huggingface.co/Lykon/DreamShaper",
+    "license": "Условия автора в карточке модели",
+    "size": 2132625894,
+    "sha256": "879db523c30d3b9017143d56705015e15a2cb5628762c11d086fed9538abd7fd",
+    "formats": [[512, 512], [512, 768], [768, 512]]
+  }
+}

@@ -1,0 +1,9 @@
+runtime/
+data/
+__pycache__/
+*.pyc
+.venv/
+*.log
+dist/
+models/checkpoints/*.safetensors
+.plan/

@@ -1,0 +1,3 @@
+easyphoto:
+  base_path: .
+  checkpoints: models/checkpoints

@@ -1,0 +1,16 @@
+*.zip
+*.zip.*
+*.7z
+*.7z.*
+*.safetensors
+*.part
+*.exe
+*.log
+__pycache__/
+*.pyc
+.plan/
+.impeccable/
+CONTINUE.md
+runtime/
+data/
+dist/
